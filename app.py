@@ -17,9 +17,9 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 # Initialize database
 init_db(app)
 
-# Hugging Face API Configuration
-HUGGINGFACE_API_KEY = os.environ.get('HUGGINGFACE_API_KEY', '')
-HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1"
+# Google Gemini API Configuration
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
 # Decorator to check if user is logged in
 def login_required(f):
@@ -122,41 +122,52 @@ def chat():
 
 @app.route('/api/chat', methods=['POST'])
 def get_ai_response():
-    """Send message to AI and save to database if user is logged in"""
+    """Send message to Gemini AI and save to database if user is logged in"""
     data = request.get_json()
     user_message = data.get('message', '').strip()
     
     if not user_message:
         return jsonify({'error': 'Message cannot be empty'}), 400
     
-    if not HUGGINGFACE_API_KEY:
-        return jsonify({'error': 'API key not configured. Contact administrator.'}), 500
+    if not GEMINI_API_KEY:
+        return jsonify({'error': 'API key not configured. Please set GEMINI_API_KEY environment variable.'}), 500
     
     try:
-        # Call Hugging Face API
-        headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
+        # Call Google Gemini API
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": GEMINI_API_KEY
+        }
+        
         payload = {
-            "inputs": user_message,
-            "parameters": {
-                "max_length": 500,
-                "temperature": 0.7
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": user_message
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.7,
+                "maxOutputTokens": 500,
             }
         }
         
-        response = requests.post(HUGGINGFACE_API_URL, headers=headers, json=payload, timeout=30)
+        response = requests.post(GEMINI_API_URL, headers=headers, json=payload, timeout=30)
         
         if response.status_code != 200:
-            return jsonify({'error': 'AI service temporarily unavailable'}), 503
+            error_data = response.json()
+            error_msg = error_data.get('error', {}).get('message', 'AI service temporarily unavailable')
+            return jsonify({'error': f'AI Error: {error_msg}'}), response.status_code
         
         result = response.json()
         
-        # Extract AI response
-        if isinstance(result, list) and len(result) > 0:
-            ai_message = result[0].get('generated_text', 'No response generated').strip()
-            # Remove the input from the output if it's repeated
-            if ai_message.startswith(user_message):
-                ai_message = ai_message[len(user_message):].strip()
-        else:
+        # Extract AI response from Gemini
+        try:
+            ai_message = result['candidates'][0]['content']['parts'][0]['text'].strip()
+        except (KeyError, IndexError, TypeError):
             ai_message = 'Sorry, I could not generate a response.'
         
         # Save to database only if user is logged in
@@ -176,12 +187,13 @@ def get_ai_response():
         return jsonify({
             'success': True,
             'ai_response': ai_message,
-            'timestamp': request.timestamp if hasattr(request, 'timestamp') else '',
             'saved': 'user_id' in session
         }), 200
         
     except requests.exceptions.Timeout:
         return jsonify({'error': 'AI service timeout. Please try again.'}), 504
+    except requests.exceptions.ConnectionError:
+        return jsonify({'error': 'Connection error. Please check your internet.'}), 503
     except Exception as e:
         print(f"Error: {str(e)}")
         return jsonify({'error': f'Error: {str(e)}'}), 500
