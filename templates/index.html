@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chatbot</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="logo">AI Chat</h1>
+                <div class="header-actions">
+                    <button id="themeToggle" class="theme-btn" title="Toggle theme">
+                        <span class="theme-icon">🌙</span>
+                    </button>
+                    
+                    {% if is_authenticated %}
+                        <div class="user-menu">
+                            <span class="username">{{ username }}</span>
+                            <div class="user-dropdown">
+                                <button id="clearHistoryBtn" class="menu-item">Clear History</button>
+                                <a href="/logout" class="menu-item logout-btn">Logout</a>
+                            </div>
+                        </div>
+                    {% else %}
+                        <div class="auth-buttons">
+                            <a href="/login" class="btn-small">Login</a>
+                            <a href="/register" class="btn-small">Register</a>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Chat -->
+        <main class="chat-container">
+            <div id="chatMessages" class="messages">
+                <div class="welcome">
+                    <h2>Welcome to AI Chat</h2>
+                    <p>{% if is_authenticated %}Your chats will be saved.{% else %}Chat as guest (not saved).{% endif %}</p>
+                </div>
+            </div>
+
+            <div class="input-container">
+                <form id="chatForm" class="input-form">
+                    <input 
+                        type="text" 
+                        id="messageInput" 
+                        placeholder="Ask me anything..."
+                        autocomplete="off"
+                        required
+                    >
+                    <button type="submit" class="send-btn">Send</button>
+                </form>
+                <div class="status-bar">
+                    {% if is_authenticated %}
+                        <span class="status-badge saved">✓ Logged in - Chats saved</span>
+                    {% else %}
+                        <span class="status-badge guest">⚠ Guest mode - Chats not saved</span>
+                    {% endif %}
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // ============ THEME TOGGLE ============
+        const themeToggle = document.getElementById('themeToggle');
+        const html = document.documentElement;
+        const savedTheme = localStorage.getItem('theme') || 'light';
+
+        // Set initial theme
+        html.setAttribute('data-theme', savedTheme);
+        updateThemeIcon(savedTheme);
+
+        themeToggle.addEventListener('click', () => {
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeIcon(newTheme);
+        });
+
+        function updateThemeIcon(theme) {
+            themeToggle.innerHTML = theme === 'light' ? '<span class="theme-icon">🌙</span>' : '<span class="theme-icon">☀️</span>';
+        }
+
+        // ============ CHAT FUNCTIONALITY ============
+        const chatMessages = document.getElementById('chatMessages');
+        const messageInput = document.getElementById('messageInput');
+        const chatForm = document.getElementById('chatForm');
+        const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+        const isAuthenticated = {{ 'true' if is_authenticated else 'false' }};
+
+        // Load chat history on page load
+        document.addEventListener('DOMContentLoaded', loadChatHistory);
+
+        // Event Listeners
+        chatForm.addEventListener('submit', handleSendMessage);
+        if (clearHistoryBtn) {
+            clearHistoryBtn.addEventListener('click', clearChatHistory);
+        }
+
+        // Load chat history from database
+        async function loadChatHistory() {
+            if (!isAuthenticated) return;
+
+            try {
+                const response = await fetch('/api/chat-history');
+                const data = await response.json();
+
+                if (data.success && data.chats.length > 0) {
+                    chatMessages.innerHTML = '';
+                    data.chats.forEach(chat => {
+                        addMessageToUI(chat.user_message, 'user', chat.timestamp);
+                        addMessageToUI(chat.ai_response, 'ai', chat.timestamp);
+                    });
+                    scrollToBottom();
+                }
+            } catch (error) {
+                console.error('Error loading history:', error);
+            }
+        }
+
+        // Handle sending message
+        async function handleSendMessage(e) {
+            e.preventDefault();
+
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            // Show welcome message only on first message
+            if (chatMessages.querySelector('.welcome')) {
+                chatMessages.innerHTML = '';
+            }
+
+            // Add user message to UI
+            addMessageToUI(message, 'user');
+
+            // Clear input
+            messageInput.value = '';
+            messageInput.focus();
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ message: message })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    addMessageToUI(data.ai_response, 'ai');
+                } else {
+                    addMessageToUI(`Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                addMessageToUI('Error: Unable to connect to AI service', 'error');
+            }
+
+            scrollToBottom();
+        }
+
+        // Add message to UI
+        function addMessageToUI(message, sender) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-msg`;
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.textContent = message;
+
+            messageDiv.appendChild(contentDiv);
+            chatMessages.appendChild(messageDiv);
+        }
+
+        // Scroll to bottom
+        function scrollToBottom() {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Clear chat history
+        async function clearChatHistory() {
+            if (!confirm('Clear all your chat history?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/clear-history', {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    chatMessages.innerHTML = `
+                        <div class="welcome">
+                            <h2>Chat history cleared</h2>
+                            <p>Start a new conversation</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error clearing chat history');
+            }
+        }
+
+        // Auto-focus on input
+        messageInput.focus();
+    </script>
+</body>
+</html>
